@@ -1,0 +1,73 @@
+name: "CodeQL Analysis"
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    
+    # Previne loop infinito do Sonar
+    if: ${{ !contains(github.event.head_commit.message, 'Add SonarCloud workflow') }}
+    
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: 'java-kotlin'
+            build-mode: 'manual'
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Java 21 (Obrigatório para projetos modernos)
+    - name: Setup Java for CodeQL
+      if: matrix.language == 'java-kotlin'
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+    
+    # --- ESTRATÉGIA INTELIGENTE DE BUILD (TRY-CATCH) ---
+    
+    # TENTATIVA 1: Tenta compilar TUDO (incluindo testes).
+    # 'continue-on-error: true' impede que o workflow morra se isso falhar.
+    - name: Build Java (Full)
+      id: build_full
+      if: matrix.language == 'java-kotlin'
+      continue-on-error: true
+      run: mvn clean install --batch-mode
+
+    # TENTATIVA 2: Só roda se a TENTATIVA 1 falhou.
+    # Pula os testes para garantir que pelo menos o código principal seja analisado.
+    - name: Build Java (Fallback - Skip Tests)
+      if: matrix.language == 'java-kotlin' && steps.build_full.outcome == 'failure'
+      run: |
+        echo "::warning::Build completo falhou (provavelmente testes quebrados). Tentando build sem testes."
+        mvn clean install -DskipTests -Dmaven.test.skip=true --batch-mode
+
+    # CASO 3: Para outras linguagens, segue o padrão
+    - name: Autobuild (Non-Java)
+      if: matrix.language != 'java-kotlin'
+      uses: github/codeql-action/autobuild@v3
+    
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"
