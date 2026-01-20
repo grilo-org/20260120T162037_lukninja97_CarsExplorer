@@ -1,0 +1,61 @@
+
+name: Grilo SC Analysis for Java (Maven)
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch: {}
+
+jobs:
+  sonar-analysis:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Detector de Versão Universal e Robusto
+      - name: Detect Java version
+        id: detect_java
+        run: |
+          POM_PATH=$(find . -maxdepth 2 -type f -name "pom.xml" ! -path "*/target/*" | head -n 1)
+          if [ -z "$POM_PATH" ]; then
+            echo "pom.xml não encontrado. Usando Java 17 como padrão."
+            JAVA_VERSION='17'
+          else
+            echo "Analisando pom.xml em: $POM_PATH"
+            JAVA_VERSION=$(mvn -q -Dexec.executable=echo -Dexec.args='${maven.compiler.release}' --non-recursive exec:exec -f "$POM_PATH" | grep -o '^[0-9][0-9]*' || echo '17')
+          fi
+          echo "Versão de Java detectada/definida: $JAVA_VERSION"
+          echo "java_version=$JAVA_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: ${{ steps.detect_java.outputs.java_version }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      # TENTATIVA 1: O Ideal (Com Testes e Cobertura)
+      # 'continue-on-error: true' impede que o workflow morra se falhar na compilação dos testes
+      - name: Build and Analyze (Attempt 1 - Full)
+        id: sonar_full
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=grilo-org_20260120T162037_lukninja97_CarsExplorer -Dsonar.projectName=20260120T162037_lukninja97_CarsExplorer -Dsonar.host.url=https://sonarcloud.io -Dsonar.organization=grilo-org
+
+      # TENTATIVA 2: O Fallback (Ignorar Testes Quebrados)
+      # Só roda se a Tentativa 1 falhou. Usa -Dmaven.test.skip=true
+      - name: Build and Analyze (Fallback - Skip Tests)
+        if: steps.sonar_full.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          echo "::warning::Build completo falhou. Tentando build sem testes."
+          mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dmaven.test.skip=true -Dsonar.projectKey=grilo-org_20260120T162037_lukninja97_CarsExplorer -Dsonar.projectName=20260120T162037_lukninja97_CarsExplorer -Dsonar.host.url=https://sonarcloud.io -Dsonar.organization=grilo-org
